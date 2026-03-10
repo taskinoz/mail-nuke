@@ -1,0 +1,19 @@
+{
+  "name": "mail-nuke",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "prepare": "bun scripts/prepare-eml.ts --hamDir ./exports/ham --spamDir ./exports/spam --outDir ./prepared --configDir ./config"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }, 
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "html-to-text": "^9.0.5",
+    "mailparser": "^3.9.4"
+  }
+}

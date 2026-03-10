@@ -1,0 +1,14 @@
+{
+  "subjectPrefixes": ["**SPAM**", "[SPAM]", "SPAM:"],
+  "subjectContains": [
+    "possible spam",
+    "spam warning",
+    "virus warning"
+  ],
+  "bodyContains": [
+    "we have leaked your password",
+    "we have been watching you",
+    "i know your password",
+    "your device has been infected"
+  ]
+}
