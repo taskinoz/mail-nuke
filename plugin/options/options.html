@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local Spam Filter Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <h1>Local Spam Filter</h1>
+      <p class="lede">Configure how the Thunderbird add-on talks to your local spam scoring service and what actions it takes after a spam decision.</p>
+
+      <section class="card">
+        <h2>Modes</h2>
+        <label><input type="checkbox" id="automaticEnabled" /> Automatic mode</label>
+        <p class="hint">Scores new messages as they arrive.</p>
+        <label><input type="checkbox" id="autoOnlyInboxLike" /> Only auto-score inbox-like folders</label>
+        <label><input type="checkbox" id="manualEnabled" /> Manual mode</label>
+        <p class="hint">Shows the message toolbar button that scores the currently displayed email.</p>
+        <label><input type="checkbox" id="dryRun" /> Dry run</label>
+        <p class="hint">Score messages but do not mark, tag, or move anything.</p>
+      </section>
+
+      <section class="card">
+        <h2>Scoring service</h2>
+        <label>
+          Service URL
+          <input type="url" id="serviceUrl" placeholder="http://127.0.0.1:8765/score" />
+        </label>
+        <label>
+          Timeout (ms)
+          <input type="number" id="requestTimeoutMs" min="1000" step="500" />
+        </label>
+        <label>
+          Spam label value
+          <input type="text" id="spamLabelValue" placeholder="spam" />
+        </label>
+        <label>
+          Spam score threshold
+          <input type="number" id="spamScoreThreshold" min="0" max="1" step="0.01" />
+        </label>
+        <label><input type="checkbox" id="includeRawHeaders" /> Include raw RFC 822 text in scoring payload</label>
+        <div class="button-row">
+          <button id="testService" type="button">Test service</button>
+          <span id="testServiceResult" class="hint"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Actions</h2>
+        <label><input type="checkbox" id="markJunkEnabled" /> Mark as junk</label>
+        <label><input type="checkbox" id="markReadEnabled" /> Mark as read after spam action</label>
+        <label><input type="checkbox" id="moveEnabled" /> Move spam messages</label>
+
+        <label>
+          Destination mode
+          <select id="moveDestinationMode">
+            <option value="junk">Use the account junk folder</option>
+            <option value="custom">Use a custom folder</option>
+          </select>
+        </label>
+
+        <label id="customFolderWrap">
+          Custom folder
+          <select id="customFolderId"></select>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Tagging</h2>
+        <label><input type="checkbox" id="tagEnabled" /> Add a tag to detected spam</label>
+        <label>
+          Tag name
+          <input type="text" id="tagName" />
+        </label>
+        <label>
+          Tag color
+          <input type="color" id="tagColor" />
+        </label>
+      </section>
+
+      <section class="card actions">
+        <button id="save" type="button">Save settings</button>
+        <span id="status" class="hint"></span>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

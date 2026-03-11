@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Local Spam Filter",
+  "version": "0.1.0",
+  "description": "Scores emails with a local spam scoring service and can mark/move them automatically or manually.",
+  "author": "OpenAI",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "local-spam-filter@example.com",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "accountsRead",
+    "messagesRead",
+    "messagesMove",
+    "messagesUpdate",
+    "messagesTags",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "message_display_action": {
+    "default_title": "Score this message",
+    "default_icon": {
+      "16": "icons/shield-16.png",
+      "32": "icons/shield-32.png",
+      "64": "icons/shield-64.png"
+    }
+  },
+  "icons": {
+    "16": "icons/shield-16.png",
+    "32": "icons/shield-32.png",
+    "64": "icons/shield-64.png",
+    "128": "icons/shield-128.png"
+  }
+}
