@@ -1,0 +1,13 @@
+[project]
+name = "mail-nuke"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "html2text>=2025.4.15",
+    "joblib>=1.5.3",
+    "mail-parser>=4.1.4",
+    "pandas>=3.0.1",
+    "scikit-learn>=1.8.0",
+]
