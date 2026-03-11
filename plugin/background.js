@@ -10,9 +10,7 @@ const DEFAULT_SETTINGS = {
   customFolderId: "",
   markJunkEnabled: true,
   markReadEnabled: false,
-  tagEnabled: true,
-  tagName: "SpamFilter",
-  tagColor: "#d9480f",
+  tagEnabled: false,
   monitorAllFolders: false,
   dryRun: false,
   autoOnlyInboxLike: true,
@@ -21,7 +19,6 @@ const DEFAULT_SETTINGS = {
 
 const state = {
   settings: { ...DEFAULT_SETTINGS },
-  ensuredTagKey: null,
   processing: new Set()
 };
 
@@ -36,27 +33,32 @@ async function saveSettings(patch) {
   await loadSettings();
 }
 
+function normalizeSpecialUse(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v).toLowerCase());
+  }
+  return [String(value).toLowerCase()];
+}
+
 function isFolderPathLikeInbox(folder) {
   const specialUse = normalizeSpecialUse(folder?.specialUse);
   if (specialUse.includes("inbox")) return true;
+
   const path = String(folder?.path || "").toLowerCase();
   return path.endsWith("/inbox") || path === "/inbox" || path === "inbox";
-}
-
-function normalizeSpecialUse(value) {
-  if (!value) return [];
-  if (Array.isArray(value)) return value.map((v) => String(v).toLowerCase());
-  return [String(value).toLowerCase()];
 }
 
 async function iterateMessageList(messageList) {
   const items = [...(messageList?.messages || [])];
   let listId = messageList?.id || null;
+
   while (listId) {
     const nextPage = await messenger.messages.continueList(listId);
     items.push(...(nextPage?.messages || []));
     listId = nextPage?.id || null;
   }
+
   return items;
 }
 
@@ -73,7 +75,9 @@ function stripTags(html) {
 
 function collectTextParts(part, out) {
   if (!part || typeof part !== "object") return;
+
   const contentType = String(part.contentType || "").toLowerCase();
+
   if (part.body && contentType.startsWith("text/")) {
     if (contentType.startsWith("text/plain")) {
       out.plain.push(part.body);
@@ -81,13 +85,17 @@ function collectTextParts(part, out) {
       out.html.push(part.body);
     }
   }
+
   for (const child of part.parts || []) {
     collectTextParts(child, out);
   }
 }
 
 async function buildScorePayload(messageHeader) {
-  const full = await messenger.messages.getFull(messageHeader.id, { decodeContent: true });
+  const full = await messenger.messages.getFull(messageHeader.id, {
+    decodeContent: true
+  });
+
   const parts = { plain: [], html: [] };
   collectTextParts(full, parts);
 
@@ -107,7 +115,7 @@ async function buildScorePayload(messageHeader) {
 
   return {
     messageId: messageHeader.id,
-    from: messageHeader.author || "",
+    from_header: messageHeader.author || "",
     subject: messageHeader.subject || "",
     body: bodyText || "",
     date: messageHeader.date ? new Date(messageHeader.date).toISOString() : null,
@@ -127,6 +135,7 @@ async function buildScorePayload(messageHeader) {
 async function callScoringService(payload) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), state.settings.requestTimeoutMs);
+
   try {
     const res = await fetch(state.settings.serviceUrl, {
       method: "POST",
@@ -134,9 +143,11 @@ async function callScoringService(payload) {
       body: JSON.stringify(payload),
       signal: controller.signal
     });
+
     if (!res.ok) {
       throw new Error(`Scoring service returned ${res.status}`);
     }
+
     return await res.json();
   } finally {
     clearTimeout(timer);
@@ -145,56 +156,39 @@ async function callScoringService(payload) {
 
 function isSpamResult(result) {
   if (!result || typeof result !== "object") return false;
-  if (String(result.label || "").toLowerCase() === String(state.settings.spamLabelValue).toLowerCase()) {
+
+  if (
+    String(result.label || "").toLowerCase() ===
+    String(state.settings.spamLabelValue).toLowerCase()
+  ) {
     return true;
   }
+
   const score = Number(result.spamScore);
   return Number.isFinite(score) && score >= Number(state.settings.spamScoreThreshold);
-}
-
-async function ensureTag() {
-  if (!state.settings.tagEnabled) return null;
-  if (state.ensuredTagKey) return state.ensuredTagKey;
-
-  const tags = await messenger.messages.tags.list();
-  const existing = tags.find((tag) => tag.tag.toLowerCase() === state.settings.tagName.toLowerCase());
-  if (existing) {
-    state.ensuredTagKey = existing.key;
-    return existing.key;
-  }
-
-  const key = await messenger.messages.tags.create(undefined, state.settings.tagName, state.settings.tagColor);
-  state.ensuredTagKey = key;
-  return key;
-}
-
-async function applyTag(messageHeader) {
-  if (!state.settings.tagEnabled) return;
-  const tagKey = await ensureTag();
-  if (!tagKey) return;
-  const details = await messenger.messages.get(messageHeader.id);
-  const tags = new Set(details.tags || []);
-  tags.add(tagKey);
-  await messenger.messages.update(messageHeader.id, { tags: [...tags] });
-}
-
-async function findFolderById(folderId) {
-  if (!folderId) return null;
-  const accounts = await messenger.accounts.list(true);
-  for (const account of accounts) {
-    const found = walkFolders(account.rootFolder, (folder) => folder.id === folderId);
-    if (found) return found;
-  }
-  return null;
 }
 
 function walkFolders(folder, predicate) {
   if (!folder) return null;
   if (predicate(folder)) return folder;
+
   for (const child of folder.subFolders || []) {
     const found = walkFolders(child, predicate);
     if (found) return found;
   }
+
+  return null;
+}
+
+async function findFolderById(folderId) {
+  if (!folderId) return null;
+
+  const accounts = await messenger.accounts.list(true);
+  for (const account of accounts) {
+    const found = walkFolders(account.rootFolder, (folder) => folder.id === folderId);
+    if (found) return found;
+  }
+
   return null;
 }
 
@@ -210,7 +204,9 @@ async function findJunkFolderForMessage(messageHeader) {
     : accounts;
 
   for (const account of preferredAccounts) {
-    const found = walkFolders(account.rootFolder, (folder) => normalizeSpecialUse(folder.specialUse).includes("junk"));
+    const found = walkFolders(account.rootFolder, (folder) =>
+      normalizeSpecialUse(folder.specialUse).includes("junk")
+    );
     if (found) return found;
   }
 
@@ -222,14 +218,16 @@ async function getDestinationFolder(messageHeader) {
     const custom = await findFolderById(state.settings.customFolderId);
     if (custom) return custom;
   }
+
   return await findJunkFolderForMessage(messageHeader);
 }
 
 async function applyActions(messageHeader, result, reason) {
-  if (state.settings.dryRun) return { moved: false, tagged: false, markedJunk: false, dryRun: true };
+  if (state.settings.dryRun) {
+    return { moved: false, markedJunk: false, dryRun: true };
+  }
 
   let markedJunk = false;
-  let tagged = false;
   let moved = false;
 
   if (state.settings.markJunkEnabled) {
@@ -241,36 +239,40 @@ async function applyActions(messageHeader, result, reason) {
     await messenger.messages.update(messageHeader.id, { read: true });
   }
 
-  if (state.settings.tagEnabled) {
-    await applyTag(messageHeader);
-    tagged = true;
-  }
-
   if (state.settings.moveEnabled) {
     const destination = await getDestinationFolder(messageHeader);
+
     if (destination?.id) {
-      await messenger.messages.move([messageHeader.id], destination.id, { isUserAction: reason === "manual" });
+      await messenger.messages.move(
+        [messageHeader.id],
+        destination.id,
+        { isUserAction: reason === "manual" }
+      );
       moved = true;
     } else {
       console.warn("No destination folder found for spam message", messageHeader.id);
     }
   }
 
-  return { moved, tagged, markedJunk, dryRun: false };
+  return { moved, markedJunk, dryRun: false };
 }
 
 async function scoreAndMaybeProcess(messageHeader, reason = "manual") {
   const dedupeKey = `${messageHeader.id}:${reason}`;
   if (state.processing.has(dedupeKey)) return null;
+
   state.processing.add(dedupeKey);
+
   try {
     const payload = await buildScorePayload(messageHeader);
     const result = await callScoringService(payload);
     const spam = isSpamResult(result);
+
     let actions = null;
     if (spam) {
       actions = await applyActions(messageHeader, result, reason);
     }
+
     return { payload, result, spam, actions };
   } finally {
     state.processing.delete(dedupeKey);
@@ -281,20 +283,31 @@ async function scoreDisplayedMessages(tabId) {
   const displayed = await messenger.messageDisplay.getDisplayedMessages(tabId);
   const messages = await iterateMessageList(displayed);
   const results = [];
+
   for (const message of messages) {
-    results.push({ messageId: message.id, ...(await scoreAndMaybeProcess(message, "manual")) });
+    const processed = await scoreAndMaybeProcess(message, "manual");
+    results.push({
+      messageId: message.id,
+      ...processed
+    });
   }
+
   return results;
 }
 
 async function updateActionForTab(tabId) {
-  const settings = state.settings;
-  if (settings.manualEnabled) {
+  if (state.settings.manualEnabled) {
     await messenger.messageDisplayAction.enable(tabId);
-    await messenger.messageDisplayAction.setTitle({ tabId, title: "Score this message" });
+    await messenger.messageDisplayAction.setTitle({
+      tabId,
+      title: "Score this message"
+    });
   } else {
     await messenger.messageDisplayAction.disable(tabId);
-    await messenger.messageDisplayAction.setTitle({ tabId, title: "Manual scoring disabled in Local Spam Filter settings" });
+    await messenger.messageDisplayAction.setTitle({
+      tabId,
+      title: "Manual scoring disabled in Local Spam Filter settings"
+    });
   }
 }
 
@@ -303,6 +316,7 @@ async function maybeHandleNewMail(folder, messageList) {
   if (state.settings.autoOnlyInboxLike && !isFolderPathLikeInbox(folder)) return;
 
   const messages = await iterateMessageList(messageList);
+
   for (const message of messages) {
     try {
       await scoreAndMaybeProcess(message, "automatic");
@@ -318,25 +332,32 @@ messenger.runtime.onInstalled.addListener(async () => {
 
 messenger.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
+
   const patch = {};
   for (const [key, value] of Object.entries(changes)) {
     patch[key] = value.newValue;
   }
+
   Object.assign(state.settings, patch);
-  if (patch.tagName || patch.tagColor) {
-    state.ensuredTagKey = null;
-  }
 });
 
-messenger.messages.onNewMailReceived.addListener((folder, messages) => {
-  maybeHandleNewMail(folder, messages);
-}, true);
+messenger.messages.onNewMailReceived.addListener(
+  (folder, messages) => {
+    maybeHandleNewMail(folder, messages);
+  },
+  true
+);
 
 messenger.messageDisplayAction.onClicked.addListener(async (tab) => {
   try {
     const results = await scoreDisplayedMessages(tab.id);
     const spamCount = results.filter((r) => r?.spam).length;
-    await messenger.messageDisplayAction.setBadgeText({ tabId: tab.id, text: spamCount ? String(spamCount) : "" });
+
+    await messenger.messageDisplayAction.setBadgeText({
+      tabId: tab.id,
+      text: spamCount ? String(spamCount) : ""
+    });
+
     await messenger.messageDisplayAction.setTitle({
       tabId: tab.id,
       title: spamCount
@@ -345,8 +366,16 @@ messenger.messageDisplayAction.onClicked.addListener(async (tab) => {
     });
   } catch (error) {
     console.error("Manual scoring failed", error);
-    await messenger.messageDisplayAction.setBadgeText({ tabId: tab.id, text: "!" });
-    await messenger.messageDisplayAction.setTitle({ tabId: tab.id, title: `Manual scoring failed: ${error?.message || error}` });
+
+    await messenger.messageDisplayAction.setBadgeText({
+      tabId: tab.id,
+      text: "!"
+    });
+
+    await messenger.messageDisplayAction.setTitle({
+      tabId: tab.id,
+      title: `Manual scoring failed: ${error?.message || error}`
+    });
   }
 });
 
@@ -366,13 +395,17 @@ messenger.runtime.onMessage.addListener(async (message) => {
     case "get-settings":
       await loadSettings();
       return state.settings;
+
     case "save-settings":
       await saveSettings(message.payload || {});
       return { ok: true, settings: state.settings };
+
     case "list-folders":
       return await listFoldersForOptions();
+
     case "test-service":
       return await testService();
+
     default:
       return undefined;
   }
@@ -380,6 +413,7 @@ messenger.runtime.onMessage.addListener(async (message) => {
 
 async function listFoldersForOptions() {
   const accounts = await messenger.accounts.list(true);
+
   return accounts.map((account) => ({
     id: account.id,
     name: account.name,
@@ -389,6 +423,7 @@ async function listFoldersForOptions() {
 
 function flattenFolders(folder, accountName, result = []) {
   if (!folder) return result;
+
   if (folder.path) {
     result.push({
       id: folder.id,
@@ -399,18 +434,21 @@ function flattenFolders(folder, accountName, result = []) {
       specialUse: normalizeSpecialUse(folder.specialUse)
     });
   }
+
   for (const child of folder.subFolders || []) {
     flattenFolders(child, accountName, result);
   }
+
   return result;
 }
 
 async function testService() {
   const sample = {
-    from: "Test Sender <test@example.com>",
+    from_header: "Test Sender <test@example.com>",
     subject: "Test subject",
     body: "Test body"
   };
+
   try {
     const result = await callScoringService(sample);
     return { ok: true, result };
