@@ -33,9 +33,18 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
+# Python
+venv
+__pycache__
+*.pyc
+
 # Settings
 config/*.txt
+
+# data exports
 exports/ham/*.eml
 exports/spam/*.eml
 prepared
 
+# trained models
+models/*.joblib
