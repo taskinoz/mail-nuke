@@ -234,8 +234,42 @@ function cleanText(input: string): string {
   );
 }
 
+async function checkReadableNonEmptyFile(filePath: string): Promise<{
+  ok: boolean;
+  reason?: string;
+  size?: number;
+}> {
+  try {
+    const info = await fs.stat(filePath);
+
+    if (!info.isFile()) {
+      return { ok: false, reason: "not_a_file" };
+    }
+
+    if (info.size <= 0) {
+      return { ok: false, reason: "empty_file", size: info.size };
+    }
+
+    return { ok: true, size: info.size };
+  } catch (error: any) {
+    if (error?.code === "ENOENT") {
+      return { ok: false, reason: "missing" };
+    }
+
+    return {
+      ok: false,
+      reason: error?.code ? `stat_failed:${error.code}` : "stat_failed",
+    };
+  }
+}
+
 async function parseEml(filePath: string) {
   const raw = await fs.readFile(filePath);
+
+  if (!raw || raw.length === 0) {
+    throw new Error(`Empty .eml file: ${filePath}`);
+  }
+
   const parsed = await simpleParser(raw);
 
   const fromValue = parsed.from?.value?.[0];
@@ -257,6 +291,10 @@ async function parseEml(filePath: string) {
         })
       : "";
 
+  if (!subjectRaw && !bodyRaw && !fromRaw) {
+    throw new Error(`Malformed or blank .eml content: ${filePath}`);
+  }
+
   return {
     fromRaw,
     fromAddress,
@@ -266,7 +304,6 @@ async function parseEml(filePath: string) {
     bodyRaw,
   };
 }
-
 function makeDedupeKey(
   fromDomain: string,
   subject: string,
@@ -324,11 +361,20 @@ async function main() {
   const dataset: PreparedEmail[] = [];
   const seenDedupe = new Set<string>();
 
+  const skippedFiles: Array<{
+    file: string;
+    label: Label;
+    reason: string;
+  }> = [];
+
   const stats = {
     total: 0,
     ham: 0,
     spam: 0,
     deduped: 0,
+    skipped: 0,
+    skippedByReason: {} as Record<string, number>,
+    parseErrors: 0,
     train: 0,
     valid: 0,
     test: 0,
@@ -341,8 +387,39 @@ async function main() {
     },
   };
 
-  for (const item of allFiles) {
-    const parsed = await parseEml(item.file);
+    for (const item of allFiles) {
+    const fileCheck = await checkReadableNonEmptyFile(item.file);
+
+    if (!fileCheck.ok) {
+      const reason = fileCheck.reason ?? "unknown";
+      skippedFiles.push({
+        file: item.file,
+        label: item.label,
+        reason,
+      });
+      stats.skipped += 1;
+      stats.skippedByReason[reason] = (stats.skippedByReason[reason] ?? 0) + 1;
+      console.warn(`Skipping ${item.file}: ${reason}`);
+      continue;
+    }
+
+    let parsed;
+    try {
+      parsed = await parseEml(item.file);
+    } catch (error: any) {
+      const reason = error?.message || "parse_failed";
+      skippedFiles.push({
+        file: item.file,
+        label: item.label,
+        reason,
+      });
+      stats.skipped += 1;
+      stats.parseErrors += 1;
+      stats.skippedByReason["parse_failed"] =
+        (stats.skippedByReason["parse_failed"] ?? 0) + 1;
+      console.warn(`Skipping ${item.file}: ${reason}`);
+      continue;
+    }
 
     const originalSubject = cleanText(parsed.subjectRaw);
     let cleanSubject = originalSubject;
@@ -522,6 +599,12 @@ async function main() {
     await fs.writeFile(filePath, content, "utf8");
   }
 
+  await fs.writeFile(
+    path.join(args.outDir, "skipped-files.json"),
+    JSON.stringify(skippedFiles, null, 2),
+    "utf8",
+  );
+
   await writeJsonl(path.join(args.outDir, "dataset.jsonl"), dataset);
   await writeJsonl(path.join(args.outDir, "train.jsonl"), train);
   await writeJsonl(path.join(args.outDir, "valid.jsonl"), valid);
@@ -534,7 +617,7 @@ async function main() {
 
   console.log(`Prepared ${stats.total} emails`);
   console.log(
-    `Ham: ${stats.ham}, Spam: ${stats.spam}, Deduped: ${stats.deduped}`,
+    `Ham: ${stats.ham}, Spam: ${stats.spam}, Deduped: ${stats.deduped}, Skipped: ${stats.skipped}`,
   );
   console.log(
     `Train: ${stats.train}, Valid: ${stats.valid}, Test: ${stats.test}`,
