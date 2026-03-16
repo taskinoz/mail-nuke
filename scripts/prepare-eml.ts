@@ -387,7 +387,7 @@ async function main() {
     },
   };
 
-    for (const item of allFiles) {
+  for (const item of allFiles) {
     const fileCheck = await checkReadableNonEmptyFile(item.file);
 
     if (!fileCheck.ok) {
