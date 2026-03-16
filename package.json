@@ -6,7 +6,6 @@
   "scripts": {
     "package:plugin": "bun run scripts/package-plugin.ts",
     "prepare": "bun run scripts/prepare-eml.ts --hamDir ./exports/ham --spamDir ./exports/spam --outDir ./prepared --configDir ./config"
-
   },
   "devDependencies": {
     "@types/bun": "latest"

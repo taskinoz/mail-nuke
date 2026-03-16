@@ -45,6 +45,13 @@ config/*.txt
 exports/ham/*.eml
 exports/spam/*.eml
 prepared
+*.eml
+exports/**/*.eml
+exports/**/*.html
 
 # trained models
 models/*.joblib
+
+# Docker
+state/
+logs/

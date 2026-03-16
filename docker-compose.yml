@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  # spam-api:
+  #   build: .
+  #   container_name: mail-nuke-api
+  #   command: uv run uvicorn trainer.server:app --host 0.0.0.0 --port 8765
+  #   ports:
+  #     - "8765:8765"
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - ./models:/app/models
+  #     - ./config:/app/config
+  #     - ./logs:/app/logs
+  #   restart: unless-stopped
+
+  imap-worker:
+    build: .
+    container_name: mail-nuke-imap-worker
+    command: uv run python -m trainer.imap_worker
+    env_file:
+      - .env
+    volumes:
+      - ./models:/app/models
+      - ./config:/app/config
+      - ./logs:/app/logs
+      - ./state:/app/state
+    restart: unless-stopped

@@ -7,9 +7,11 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.135.1",
     "html2text>=2025.4.15",
+    "imapclient>=3.1.0",
     "joblib>=1.5.3",
     "mail-parser>=4.1.4",
     "pandas>=3.0.1",
+    "python-dotenv>=1.2.2",
     "scikit-learn>=1.8.0",
     "uvicorn>=0.41.0",
 ]

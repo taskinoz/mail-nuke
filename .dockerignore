@@ -1,0 +1,15 @@
+exports/
+prepared/
+logs/
+state/
+dist/
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.joblib
+*.zip
+*.xpi
+node_modules/
