@@ -138,6 +138,9 @@ def fetch_raw_email(client: IMAPClient, uid: int) -> bytes | None:
 def mark_seen(client: IMAPClient, uid: int) -> None:
     client.add_flags([uid], [b"\\Seen"])
 
+def remove_seen(client: IMAPClient, uid: int) -> None:
+    client.remove_flags([uid], [b"\\Seen"])
+
 
 def try_move(client: IMAPClient, uid: int, destination_folder: str) -> bool:
     try:
@@ -216,10 +219,12 @@ def process_uid(
             if settings.mark_seen_on_spam:
                 try:
                     client.select_folder(settings.imap_spam_folder)
+                    mark_seen(client, uid)
                 except Exception:
                     pass
     else:
         action_row["action"] = "left_in_place"
+        remove_seen(client, uid)
 
     append_jsonl(settings.action_log_file, action_row)
 
