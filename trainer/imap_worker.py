@@ -36,6 +36,10 @@ class Settings:
     state_file: Path
     action_log_file: Path
 
+def validate_folder(client, folder_name):
+    folders = [name for _, _, name in client.list_folders()]
+    if folder_name not in folders:
+        raise RuntimeError(f"Folder does not exist: {folder_name}")
 
 def env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -236,6 +240,13 @@ def main() -> None:
         client = None
         try:
             client = connect_imap(settings)
+
+            folders = client.list_folders()
+            print("DEBUG: IMAP folders:")
+            for flags, delim, name in folders:
+                print("IMAP folder:", name)
+
+            validate_folder(client, settings.imap_source_folder)
             client.select_folder(settings.imap_source_folder)
 
             candidate_uids = search_candidate_uids(client, settings)
