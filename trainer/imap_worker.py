@@ -212,21 +212,32 @@ def process_uid(
         else:
             ensure_destination_folder(client, settings.imap_spam_folder)
 
+            # Always operate from the source mailbox.
+            client.select_folder(settings.imap_source_folder)
+
+            if settings.mark_seen_on_spam:
+                mark_seen(client, uid)
+
             moved = try_move(client, uid, settings.imap_spam_folder)
             if not moved:
+                client.select_folder(settings.imap_source_folder)
                 copy_delete_expunge(client, uid, settings.imap_spam_folder)
 
             action_row["action"] = "moved_to_spam"
 
+            # Optional: mark seen BEFORE moving, while UID is still valid in source folder.
             if settings.mark_seen_on_spam:
                 try:
-                    client.select_folder(settings.imap_spam_folder)
-                    mark_seen(client, uid)
-                except Exception:
-                    pass
+                    client.select_folder(settings.imap_source_folder)
+                except Exception as exc:
+                    print(f"Failed to mark seen before move for UID {uid}: {exc}")
     else:
         action_row["action"] = "left_in_place"
-        remove_seen(client, uid)
+        try:
+            client.select_folder(settings.imap_source_folder)
+            remove_seen(client, uid)
+        except Exception as exc:
+            print(f"Failed to unsee UID {uid}: {exc}")
 
     append_jsonl(settings.action_log_file, action_row)
 

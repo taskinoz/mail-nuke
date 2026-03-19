@@ -250,6 +250,24 @@ Example output:
 dist/local-thunderbird-spam-filter-v1.0.0.xpi
 ```
 
+## Docker
+
+A Dockerfile is included for running the imap-worker in a container as an alternative to running it directly on the host.
+
+### Configure environment variables
+
+Copy the `.env.example` file to `.env` and edit the values as needed.
+
+```bash
+cp .env.example .env
+```
+
+### Build the Docker image
+
+```bash
+docker compose up -d --build
+```
+
 ## Development
 
 ### Run the Python scoring server
