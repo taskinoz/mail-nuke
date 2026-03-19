@@ -35,6 +35,7 @@ class Settings:
     process_only_unseen: bool
     state_file: Path
     action_log_file: Path
+    debug: bool = False
 
 def validate_folder(client, folder_name):
     folders = [name for _, _, name in client.list_folders()]
@@ -69,6 +70,7 @@ def load_settings() -> Settings:
         process_only_unseen=env_bool("PROCESS_ONLY_UNSEEN", True),
         state_file=STATE_DIR / os.getenv("STATE_FILENAME", "imap-worker-state.json"),
         action_log_file=LOG_DIR / os.getenv("ACTION_LOG_FILENAME", "imap-actions.jsonl"),
+        debug=env_bool("DEBUG", False),
     )
 
 
@@ -241,15 +243,27 @@ def main() -> None:
     print(f"[imap-worker] source={settings.imap_source_folder} spam={settings.imap_spam_folder}")
     print(f"[imap-worker] poll={settings.imap_poll_seconds}s dry_run={settings.dry_run}")
 
+    # Check IMAP folders
+    if settings.debug:
+        client = connect_imap(settings)
+        folders = client.list_folders()
+        print("DEBUG: IMAP folders:")
+        print("Email:", settings.imap_username)
+        for flags, delim, name in folders:
+            print("IMAP folder:", name)
+        client.logout()
+
     while True:
         client = None
         try:
             client = connect_imap(settings)
 
-            folders = client.list_folders()
-            print("DEBUG: IMAP folders:")
-            for flags, delim, name in folders:
-                print("IMAP folder:", name)
+            if settings.debug:
+                folders = client.list_folders()
+                print("DEBUG: IMAP folders:")
+                print("Email:", settings.imap_username)
+                for flags, delim, name in folders:
+                    print("IMAP folder:", name)
 
             validate_folder(client, settings.imap_source_folder)
             client.select_folder(settings.imap_source_folder)
