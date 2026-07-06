@@ -528,7 +528,14 @@ async function main() {
     }
     seenDedupe.add(dedupeKey);
 
-    const split = chooseSplit(dedupeKey, args.trainPct, args.validPct);
+    // Human-reviewed production misses are training data, never holdout data.
+    // This keeps the validation/test sets stable across weekly retrains.
+    const isFeedback = item.file
+      .split(path.sep)
+      .some((part) => part.toLowerCase() === "feedback");
+    const split = isFeedback
+      ? "train"
+      : chooseSplit(dedupeKey, args.trainPct, args.validPct);
 
     const record: PreparedEmail = {
       id: stableHash(item.file),

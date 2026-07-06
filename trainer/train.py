@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 from pathlib import Path
 import joblib
 import pandas as pd
@@ -38,6 +39,9 @@ def extract_xy(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, default=MODEL_DIR / "spam_filter.joblib")
+    args = parser.parse_args()
     train_df = load_jsonl(DATA_DIR / "train.jsonl")
     valid_df = load_jsonl(DATA_DIR / "valid.jsonl")
     test_df = load_jsonl(DATA_DIR / "test.jsonl")
@@ -112,9 +116,10 @@ def main() -> None:
         "threshold": best_threshold,
         "classes": list(pipeline.classes_),
     }
-    joblib.dump(artifact, MODEL_DIR / "spam_filter.joblib")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(artifact, args.output)
 
-    print(f"\nSaved model to {MODEL_DIR / 'spam_filter.joblib'}")
+    print(f"\nSaved model to {args.output}")
 
 
 if __name__ == "__main__":

@@ -27,3 +27,20 @@ services:
       - ./logs:/app/logs
       - ./state:/app/state
     restart: unless-stopped
+
+  weekly-retrainer:
+    build: .
+    container_name: mail-nuke-weekly-retrainer
+    command: uv run python -m trainer.retrain_scheduler
+    env_file:
+      - .env
+    environment:
+      RETRAIN_INTERVAL_SECONDS: ${RETRAIN_INTERVAL_SECONDS:-604800}
+    volumes:
+      - ./models:/app/models
+      - ./config:/app/config:ro
+      - ./logs:/app/logs:ro
+      - ./state:/app/state
+      - ./exports:/app/exports
+      - ./prepared:/app/prepared
+    restart: unless-stopped

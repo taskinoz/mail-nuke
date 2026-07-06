@@ -12,6 +12,7 @@ It supports:
 - configurable scoring threshold
 - local HTTP scoring service
 - training pipeline using Bun + Python
+- weekly retraining from spam-folder misses and dashboard false-negative marks
 
 ---
 
@@ -251,6 +252,36 @@ dist/local-thunderbird-spam-filter-v1.0.0.xpi
 ```
 
 ## Docker
+
+### Weekly feedback retraining
+
+The `weekly-retrainer` service scans the configured spam folder every seven days. Messages the live model scored as ham are learned as spam. If you restore an observed message from Spam to `IMAP_FALSE_POSITIVE_FOLDER` (Inbox by default), its spam feedback is removed and the same raw message is learned as ham. A message must actually appear in that folder: deleting old spam does not label it as ham.
+
+It rebuilds a candidate model using those messages as training-only feedback. The candidate replaces the live model only when its spam recall does not regress on the existing test set and its ham false-positive rate remains within `RETRAIN_FP_TOLERANCE`. The previous model is retained as `models/spam_filter.previous.joblib`.
+
+The IMAP worker notices the atomic model-file replacement and reloads it before scoring the next message, so the worker container does not need a restart.
+
+The dashboard is optional. Without it, leave `DASHBOARD_MARKS_FILE` blank and run the two Mail Nuke services normally. To use dashboard marks too, mount its data directory into `weekly-retrainer` and point `DASHBOARD_MARKS_FILE` at `email-filter-marks.json` inside that mount.
+
+To test immediately once, run:
+
+```bash
+docker compose run --rm -e RETRAIN_RUN_ON_START=true weekly-retrainer uv run python -m trainer.weekly_retrain
+```
+
+New automatic actions now log the RFC `Message-ID`; this is how the collector avoids training on messages moved by the model itself. Older log entries without it cannot be excluded reliably.
+
+### Train from the current mailbox
+
+You can rebuild the model without manually exporting messages. Configure `IMAP_HAM_FOLDERS` and `IMAP_SPAM_FOLDERS` as comma-separated IMAP folder names, then run:
+
+```bash
+docker compose run --rm weekly-retrainer uv run python -m trainer.train_from_mailbox
+```
+
+This reads the current folder contents, writes a managed snapshot under `exports/ham/mailbox` and `exports/spam/mailbox`, prepares deterministic train/validation/test splits, and installs a newly trained model. Existing hand-exported files elsewhere under `exports/ham` and `exports/spam` are preserved and remain part of the dataset. The previous live model is backed up as `models/spam_filter.pre-mailbox.joblib`.
+
+Move known false positives out of Spam before running this command. The folder placement is the label used for training.
 
 A Dockerfile is included for running the imap-worker in a container as an alternative to running it directly on the host.
 

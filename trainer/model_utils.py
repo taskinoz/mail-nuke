@@ -23,6 +23,7 @@ PROVIDER_PREFIXES: list[str] = ["**SPAM**", "[SPAM]", "SPAM:"]
 _PIPELINE = None
 _THRESHOLD = None
 _CLASSES = None
+_MODEL_MTIME_NS = None
 
 
 def read_lines(path: Path) -> list[str]:
@@ -43,14 +44,16 @@ def load_config() -> None:
 
 
 def load_model() -> None:
-    global _PIPELINE, _THRESHOLD, _CLASSES
-    if _PIPELINE is not None:
+    global _PIPELINE, _THRESHOLD, _CLASSES, _MODEL_MTIME_NS
+    mtime_ns = MODEL_PATH.stat().st_mtime_ns
+    if _PIPELINE is not None and _MODEL_MTIME_NS == mtime_ns:
         return
 
     artifact = joblib.load(MODEL_PATH)
     _PIPELINE = artifact["pipeline"]
     _THRESHOLD = float(artifact["threshold"])
     _CLASSES = list(artifact["classes"])
+    _MODEL_MTIME_NS = mtime_ns
 
 
 def clean_text(text: str) -> str:
@@ -191,6 +194,11 @@ def extract_message_parts_from_bytes(raw_eml: bytes) -> tuple[str, str, str]:
     return from_header, subject, body
 
 
+def extract_message_id_from_bytes(raw_eml: bytes) -> str:
+    msg = BytesParser(policy=policy.default).parsebytes(raw_eml, headersonly=True)
+    return str(msg["message-id"] or "").strip()
+
+
 def build_model_text(from_header: str, subject: str, body: str) -> tuple[str, dict[str, Any]]:
     provider_clean_subject, provider_count = strip_provider_prefix(subject)
     body = strip_quoted_replies(body)
@@ -261,6 +269,7 @@ def score_raw_email(raw_eml: bytes, threshold_override: float | None = None) -> 
         **result,
         "from_header": from_header,
         "subject": subject,
+        "messageId": extract_message_id_from_bytes(raw_eml),
         "meta": meta,
         "modelText": model_text,
     }

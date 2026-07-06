@@ -197,6 +197,7 @@ def process_uid(
         "uid": uid,
         "from": scored["from_header"],
         "subject": scored["subject"],
+        "messageId": scored["messageId"],
         "label": scored["label"],
         "spamScore": scored["spamScore"],
         "threshold": scored["threshold"],
