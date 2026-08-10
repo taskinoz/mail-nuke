@@ -459,6 +459,13 @@ def deployment_readiness(_: AuthenticatedUser) -> dict:
     return database.deployment_readiness()
 
 
+@app.get("/api/v2/jobs")
+def list_background_jobs(
+    _: AuthenticatedUser, limit: int = Query(default=20, ge=1, le=100)
+) -> list[dict]:
+    return database.list_jobs()[:limit]
+
+
 @app.get("/", response_class=FileResponse)
 def portal(_: Request) -> FileResponse:
     return FileResponse(static_dir / "index.html")

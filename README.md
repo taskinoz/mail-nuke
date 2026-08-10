@@ -6,6 +6,8 @@
 
 The current v2 foundation provides a single-owner portal and API for administrator bootstrap, login sessions, model groups, encrypted IMAP accounts, connection testing, folder discovery, multi-folder role assignment, durable indexing and reconciliation, message review, privacy profiles, and group-level model training. It is not ready to filter production mail yet.
 
+The container starts briefly as root only to make the bind-mounted `/data` directory writable by its fixed application UID, then immediately drops to the unprivileged `mailnuke` user before importing or running the application. This makes a fresh `docker compose up -d --build` work on Linux even when Docker created the host `data` directory as root.
+
 Run it with:
 
 ```bash
