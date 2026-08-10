@@ -5,6 +5,8 @@ state/
 dist/
 .git/
 .venv/
+.uv-cache/
+data/
 __pycache__/
 *.pyc
 *.pyo

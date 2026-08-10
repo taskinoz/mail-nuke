@@ -55,3 +55,6 @@ models/*.joblib
 # Docker
 state/
 logs/
+
+# Mail Nuke v2 local data
+data/

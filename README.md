@@ -1,5 +1,46 @@
 # Local Thunderbird Spam Filter
 
+> **Version 2 is under development.** The architecture and implementation sequence are documented in [`docs/v2-architecture-and-implementation-plan.md`](docs/v2-architecture-and-implementation-plan.md). The v2 foundation runs as a single web application with persistent SQLite storage.
+
+## Version 2 development snapshot
+
+The current v2 foundation provides a single-owner portal and API for administrator bootstrap, login sessions, model groups, encrypted IMAP accounts, connection testing, folder discovery, multi-folder role assignment, durable indexing and reconciliation, message review, privacy profiles, and group-level model training. It is not ready to filter production mail yet.
+
+Run it with:
+
+```bash
+docker compose up --build
+```
+
+Then open `http://127.0.0.1:8765`. API requests after setup use the bearer token returned by `POST /api/v2/auth/login`.
+
+Important endpoints are:
+
+- `POST /api/v2/setup/admin`
+- `POST /api/v2/auth/login`
+- `GET|POST /api/v2/model-groups`
+- `GET|POST /api/v2/accounts`
+- `POST /api/v2/accounts/{id}/test-connection`
+- `POST /api/v2/accounts/{id}/discover-folders`
+- `GET /api/v2/accounts/{id}/folders`
+- `PUT /api/v2/accounts/{id}/folders/roles`
+- `POST /api/v2/accounts/{id}/index`
+- `GET /api/v2/accounts/{id}/index-status`
+
+An account can assign any number of discovered folders to `spam` or `ham`. Other available roles are `monitored`, `excluded`, and `neutral`. IMAP passwords are encrypted before being stored and are never returned by the API. By default the encryption key is generated at `data/secret.key`; supply `MAIL_NUKE_SECRET_KEY` from a secret manager for a production-style deployment. Back up the key separately from ordinary database copies.
+
+The portal can queue a resumable initial index after folder roles are saved. The background worker indexes `ham`, `spam`, and `monitored` folders in bounded batches, checkpoints each folder by UIDVALIDITY and UID, stores canonical message/location records in SQLite, and writes compressed raw messages to the content-addressed `data/raw-mail` store.
+
+Each model group now has a versioned privacy profile. The portal can configure names, additional addresses, encrypted known sensitive values, and optional normalization of other email addresses. Account addresses in the group are included automatically. Initial indexing uses the canonical preprocessing pipeline, and changing a profile queues background reprocessing of retained raw messages. Model text records the privacy-profile version and only non-sensitive replacement counts; known sensitive values are write-only in the portal and encrypted at rest.
+
+Mailbox reconciliation runs periodically (`MAIL_NUKE_RECONCILE_INTERVAL_SECONDS`, five minutes by default) and can be queued manually from the portal. It completes all configured folder scans before applying changes, recognizes new locations before retiring old ones, treats a move from Spam into any configured ham folder as a ham correction, and marks a message deleted only when it is absent after a complete successful scan. Deleted messages retain their label and remain included in future training.
+
+The authenticated message review area can filter by account, model group, label, mailbox state, and sender/subject search. Dashboard labels override later folder inference. Messages can be excluded from training reversibly or permanently purged; purge removes retained raw content and derived model text while leaving a minimal audit tombstone. The next successful group training rebuild excludes those samples.
+
+Training builds an immutable, deduplicated dataset generation for the entire model group, uses stable train/validation/test cohorts, recommends a conservative threshold, and stores a versioned model artifact. The first valid model activates automatically; later candidates activate only when their held-out recall and ham false-positive rate pass the promotion gate. A portal threshold override can be pinned or reset to the recommendation. Eligible groups are queued weekly by default with `MAIL_NUKE_TRAIN_INTERVAL_SECONDS=604800`, and training can also be queued manually.
+
+New messages discovered in a `ham` or `monitored` folder can use per-account automation. Historical initial indexing remains training-only. `off` performs no inference, `observe` records predictions without changing the mailbox, and `move` moves predicted spam to an explicitly selected folder with the `spam` role. Accounts default to `off`, and enabling automation requires an active group model. Every prediction records its model version, score, effective threshold, and action result. Automated moves are tracked separately and are not treated as human-confirmed spam training labels.
+
 A local-first Thunderbird spam filter that scores messages using a custom machine learning model trained on your own inbox history.
 
 It supports:

@@ -1,29 +1,20 @@
-version: "3.9"
-
 services:
-  # spam-api:
-  #   build: .
-  #   container_name: mail-nuke-api
-  #   command: uv run uvicorn trainer.server:app --host 0.0.0.0 --port 8765
-  #   ports:
-  #     - "8765:8765"
-  #   env_file:
-  #     - .env
-  #   volumes:
-  #     - ./models:/app/models
-  #     - ./config:/app/config
-  #     - ./logs:/app/logs
-  #   restart: unless-stopped
-
-  imap-worker:
+  mail-nuke:
     build: .
-    container_name: mail-nuke-imap-worker
-    command: uv run python -m trainer.imap_worker
-    env_file:
-      - .env
-    volumes:
-      - ./models:/app/models
-      - ./config:/app/config
-      - ./logs:/app/logs
-      - ./state:/app/state
+    container_name: mail-nuke
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MAIL_NUKE_PORT:-8765}:8765"
+    environment:
+      MAIL_NUKE_DATA_DIR: /data
+      MAIL_NUKE_SECRET_KEY: ${MAIL_NUKE_SECRET_KEY:-}
+      MAIL_NUKE_RECONCILE_INTERVAL_SECONDS: ${MAIL_NUKE_RECONCILE_INTERVAL_SECONDS:-300}
+      MAIL_NUKE_TRAIN_INTERVAL_SECONDS: ${MAIL_NUKE_TRAIN_INTERVAL_SECONDS:-604800}
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
