@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import re
 from datetime import timedelta
 from contextlib import contextmanager
 from contextlib import nullcontext
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def utc_now() -> str:
@@ -101,6 +102,9 @@ class Database:
             if current_version == 6:
                 self._migrate_v6_to_v7(connection)
                 current_version = 7
+            if current_version == 7:
+                self._migrate_v7_to_v8(connection)
+                current_version = 8
             if current_version != SCHEMA_VERSION:
                 raise RuntimeError(
                     f"Unsupported database schema {current_version}; expected {SCHEMA_VERSION}"
@@ -377,6 +381,33 @@ class Database:
             CREATE INDEX idx_predictions_group_created
             ON predictions(model_group_id, created_at DESC);
             UPDATE schema_metadata SET version = 7 WHERE singleton = 1;
+            PRAGMA optimize;
+            """
+        )
+
+    def _migrate_v7_to_v8(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE VIRTUAL TABLE messages_search USING fts5(
+                subject, from_header, sender_domain
+            );
+            INSERT INTO messages_search(rowid, subject, from_header, sender_domain)
+            SELECT rowid, subject, from_header, sender_domain FROM messages;
+
+            CREATE TRIGGER messages_search_insert AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_search(rowid, subject, from_header, sender_domain)
+                VALUES (new.rowid, new.subject, new.from_header, new.sender_domain);
+            END;
+            CREATE TRIGGER messages_search_delete AFTER DELETE ON messages BEGIN
+                DELETE FROM messages_search WHERE rowid = old.rowid;
+            END;
+            CREATE TRIGGER messages_search_update
+            AFTER UPDATE OF subject, from_header, sender_domain ON messages BEGIN
+                DELETE FROM messages_search WHERE rowid = old.rowid;
+                INSERT INTO messages_search(rowid, subject, from_header, sender_domain)
+                VALUES (new.rowid, new.subject, new.from_header, new.sender_domain);
+            END;
+            UPDATE schema_metadata SET version = 8 WHERE singleton = 1;
             PRAGMA optimize;
             """
         )
@@ -1116,9 +1147,12 @@ class Database:
                 clauses.append(f"{column} = ?")
                 params.append(value)
         if search:
-            clauses.append("(messages.subject LIKE ? OR messages.from_header LIKE ? OR messages.sender_domain LIKE ?)")
-            term = f"%{search}%"
-            params.extend([term, term, term])
+            tokens = re.findall(r"\w+", search.casefold(), flags=re.UNICODE)
+            if tokens:
+                clauses.append(
+                    "messages.rowid IN (SELECT rowid FROM messages_search WHERE messages_search MATCH ?)"
+                )
+                params.append(" AND ".join(f'"{token}"*' for token in tokens))
         where = " AND ".join(clauses)
         with self.connect() as connection:
             total = connection.execute(
@@ -1140,7 +1174,12 @@ class Database:
                      ORDER BY created_at DESC LIMIT 1) AS prediction_action_status
                 FROM messages JOIN accounts ON accounts.id = messages.account_id
                 WHERE {where}
-                ORDER BY COALESCE(messages.received_at, messages.last_seen_at) DESC
+                ORDER BY COALESCE(
+                    julianday(messages.received_at),
+                    julianday(messages.last_seen_at)
+                ) DESC,
+                julianday(messages.last_seen_at) DESC,
+                messages.id DESC
                 LIMIT ? OFFSET ?
                 """,
                 [*params, limit, offset],

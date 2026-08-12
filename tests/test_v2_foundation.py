@@ -64,6 +64,40 @@ class SecurityTests(unittest.TestCase):
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_messages_are_sorted_by_actual_received_instant(self):
+        with TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "mail-nuke.db")
+            database.initialize()
+            database.create_model_group("group-id", "Personal")
+            database.create_account(
+                {
+                    "id": "account-id", "model_group_id": "group-id", "display_name": "Example",
+                    "email_address": "example@example.com", "imap_host": "imap.example.com",
+                    "imap_port": 993, "imap_use_ssl": True, "imap_username": "example@example.com",
+                    "imap_password_ciphertext": "encrypted-value",
+                }
+            )
+            database.replace_discovered_folders(
+                "account-id", [{"id": "inbox-id", "path": "INBOX", "delimiter": "/", "attributes": []}]
+            )
+            for message_id, subject, received_at, uid in (
+                ("older", "Older instant", "2026-08-12T23:30:00+11:00", 1),
+                ("newer", "Newer instant", "2026-08-12T13:00:00+00:00", 2),
+            ):
+                database.upsert_indexed_message(
+                    {
+                        "id": message_id, "account_id": "account-id", "message_key": message_id,
+                        "rfc_message_id": f"<{message_id}@test>", "content_sha256": message_id,
+                        "from_header": "sender@test", "sender_domain": "test", "subject": subject,
+                        "received_at": received_at, "raw_storage_path": f"{message_id}.gz",
+                        "effective_label": "ham", "label_source": "initial_folder:ham",
+                    },
+                    {"id": f"location-{message_id}", "folder_id": "inbox-id", "uid_validity": 1, "uid": uid},
+                )
+
+            messages = database.list_messages(account_id="account-id")["items"]
+            self.assertEqual([message["id"] for message in messages], ["newer", "older"])
+
     def test_initializes_schema_and_allows_only_one_initial_admin(self):
         with TemporaryDirectory() as directory:
             database = Database(Path(directory) / "mail-nuke.db")
@@ -200,6 +234,9 @@ class DatabaseTests(unittest.TestCase):
 
     def test_background_index_job_imports_selected_folder_and_checkpoints(self):
         class FakeImap:
+            def __init__(self):
+                self.fetch_fields = []
+
             def select_folder(self, path, readonly=True):
                 self.selected = path
                 return {b"UIDVALIDITY": 99}
@@ -208,9 +245,10 @@ class DatabaseTests(unittest.TestCase):
                 return [7]
 
             def fetch(self, uids, fields):
+                self.fetch_fields.append(fields)
                 return {
                     7: {
-                        b"RFC822": b"Message-ID: <indexed@example.test>\r\nFrom: Bad <bad@noise.test>\r\nSubject: Noise\r\n\r\nBody"
+                        b"BODY[]": b"Message-ID: <indexed@example.test>\r\nFrom: Bad <bad@noise.test>\r\nSubject: Noise\r\n\r\nBody"
                     }
                 }
 
@@ -240,9 +278,11 @@ class DatabaseTests(unittest.TestCase):
             database.set_folder_roles("account-id", [{"path": "Junk", "role": "spam"}])
             database.create_index_job("job-id", "account-id")
 
-            with patch("mail_nuke.indexer.connect", return_value=FakeImap()):
+            client = FakeImap()
+            with patch("mail_nuke.indexer.connect", return_value=client):
                 self.assertTrue(process_next_job(database, cipher, root))
 
+            self.assertEqual(client.fetch_fields, [["BODY.PEEK[]"]])
             self.assertEqual(database.get_job("job-id")["status"], "completed")
             self.assertEqual(database.account_message_counts("account-id")["spam"], 1)
             folder = database.list_folders("account-id")[0]
@@ -401,6 +441,8 @@ class DatabaseTests(unittest.TestCase):
             def __init__(self):
                 self.selected = None
                 self.moves = []
+                self.flags = []
+                self.fetch_fields = []
 
             def select_folder(self, path, readonly=True):
                 self.selected = path
@@ -410,7 +452,11 @@ class DatabaseTests(unittest.TestCase):
                 return [7] if self.selected == "INBOX" else []
 
             def fetch(self, uids, fields):
-                return {7: {b"RFC822": b"Message-ID: <live@test>\r\nFrom: Bad <bad@noise.test>\r\nSubject: Prize\r\n\r\nClaim now"}}
+                self.fetch_fields.append(fields)
+                return {7: {b"BODY[]": b"Message-ID: <live@test>\r\nFrom: Bad <bad@noise.test>\r\nSubject: Prize\r\n\r\nClaim now"}}
+
+            def add_flags(self, uids, flags):
+                self.flags.append((uids, flags))
 
             def move(self, uids, destination):
                 self.moves.append((uids, destination))
@@ -464,6 +510,8 @@ class DatabaseTests(unittest.TestCase):
                     database, cipher, root, {"id": "reconcile-id", "account_id": "account-id"}, FakeRuntime()
                 )
             self.assertEqual(client.moves, [([7], "Junk")])
+            self.assertEqual(client.fetch_fields, [["BODY.PEEK[]"]])
+            self.assertEqual(client.flags, [([7], [r"\Seen"])])
             message = database.list_messages(search="Prize")["items"][0]
             self.assertEqual(message["prediction_action_status"], "moved")
             self.assertIsNone(message["effective_label"])

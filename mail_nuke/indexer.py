@@ -16,6 +16,7 @@ from mail_nuke.scoring import ModelRuntime
 
 
 BATCH_SIZE = 50
+RAW_FETCH_FIELD = "BODY.PEEK[]"
 _MODEL_RUNTIMES: dict[Path, ModelRuntime] = {}
 
 
@@ -28,6 +29,11 @@ def _model_runtime(data_dir: Path) -> ModelRuntime:
 
 def _value(item: dict, name: str):
     return item.get(name.encode()) or item.get(name)
+
+
+def _raw_value(item: dict):
+    # Servers return BODY[] for BODY.PEEK[]. PEEK preserves the unread flag.
+    return _value(item, "BODY[]")
 
 
 def _uid_validity(selected: dict) -> int:
@@ -100,12 +106,12 @@ def run_initial_index(
                 database.update_job_progress(job["id"], processed, processed + len(uids))
                 for offset in range(0, len(uids), BATCH_SIZE):
                     batch = uids[offset : offset + BATCH_SIZE]
-                    fetched = client.fetch(batch, ["RFC822"])
+                    fetched = client.fetch(batch, [RAW_FETCH_FIELD])
                     with database.connect() as connection:
                         connection.execute("BEGIN IMMEDIATE")
                         for uid in batch:
                             item = fetched.get(uid, {})
-                            raw = _value(item, "RFC822")
+                            raw = _raw_value(item)
                             if not isinstance(raw, bytes):
                                 continue
                             message = parse_message(raw)

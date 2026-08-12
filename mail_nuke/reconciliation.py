@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from mail_nuke.database import Database
 from mail_nuke.imap_service import connect
-from mail_nuke.indexer import BATCH_SIZE, _uid_validity, _value, parse_message, store_raw
+from mail_nuke.indexer import BATCH_SIZE, RAW_FETCH_FIELD, _raw_value, _uid_validity, parse_message, store_raw
 from mail_nuke.preprocessing import load_group_profile, preprocess_email
 from mail_nuke.security import SecretCipher
 from mail_nuke.scoring import ModelRuntime
@@ -45,9 +45,9 @@ def reconcile_account(
             ]
             for offset in range(0, len(unknown), BATCH_SIZE):
                 batch = unknown[offset : offset + BATCH_SIZE]
-                fetched = client.fetch(batch, ["RFC822"])
+                fetched = client.fetch(batch, [RAW_FETCH_FIELD])
                 for uid in batch:
-                    raw = _value(fetched.get(uid, {}), "RFC822")
+                    raw = _raw_value(fetched.get(uid, {}))
                     if not isinstance(raw, bytes):
                         raise RuntimeError(f"IMAP did not return raw content for UID {uid}")
                     message = parse_message(raw)
@@ -102,6 +102,7 @@ def reconcile_account(
                                 database.finish_prediction_action(prediction_id, "failed", error)
                                 raise RuntimeError(error)
                             try:
+                                client.add_flags([uid], [r"\Seen"])
                                 client.move([uid], destination["path"])
                             except Exception as exc:
                                 error = f"{type(exc).__name__}: {exc}"
