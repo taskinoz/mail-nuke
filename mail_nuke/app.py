@@ -363,6 +363,8 @@ def queue_account_reconciliation(account_id: str, _: AuthenticatedUser) -> dict:
         return database.create_reconcile_job(str(uuid4()), account_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Account not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/v2/messages")

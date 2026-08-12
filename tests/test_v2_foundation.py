@@ -650,8 +650,42 @@ class DatabaseTests(unittest.TestCase):
             database.finish_job("readiness-index")
             database.set_account_automation("account-id", "move", "folder-id")
             readiness = database.deployment_readiness()
-            self.assertTrue(readiness["ready_to_replace_old_filters"])
+            self.assertTrue(readiness["ready"])
+            self.assertEqual(readiness["accounts"][0]["status"], "active")
             self.assertTrue(readiness["accounts"][0]["ready_to_observe"])
+
+    def test_mailbox_jobs_wait_for_folder_setup_and_initial_index(self):
+        with TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "mail-nuke.db")
+            database.initialize()
+            database.create_model_group("group-id", "Personal")
+            database.create_account(
+                {
+                    "id": "account-id", "model_group_id": "group-id", "display_name": "Example",
+                    "email_address": "example@example.com", "imap_host": "imap.example.com",
+                    "imap_port": 993, "imap_use_ssl": True, "imap_username": "example@example.com",
+                    "imap_password_ciphertext": "encrypted-value",
+                }
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "assign at least one"):
+                database.create_index_job("early-index", "account-id")
+            with self.assertRaisesRegex(RuntimeError, "folder roles"):
+                database.create_reconcile_job("early-sync", "account-id")
+            self.assertEqual(database.queue_due_reconciliations(0), 0)
+
+            database.replace_discovered_folders(
+                "account-id", [{"id": "inbox-id", "path": "INBOX", "delimiter": "/", "attributes": []}]
+            )
+            database.set_folder_roles("account-id", [{"path": "INBOX", "role": "monitored"}])
+            database.create_index_job("initial-index", "account-id")
+            with self.assertRaisesRegex(RuntimeError, "initial mailbox index"):
+                database.create_reconcile_job("pre-index-sync", "account-id")
+            self.assertEqual(database.queue_due_reconciliations(0), 0)
+
+            database.finish_job("initial-index")
+            self.assertEqual(database.queue_due_reconciliations(0), 1)
+
 
     def test_dataset_deduplication_excludes_conflicting_labels(self):
         rows = [

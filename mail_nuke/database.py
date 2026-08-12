@@ -665,6 +665,10 @@ class Database:
     def create_index_job(self, job_id: str, account_id: str) -> dict:
         if self.get_account(account_id) is None:
             raise KeyError(account_id)
+        if not self.indexable_folders(account_id):
+            raise RuntimeError(
+                "Discover folders and assign at least one Ham, Spam, or Monitored role before indexing"
+            )
         now = utc_now()
         with self.connect() as connection:
             existing = connection.execute(
@@ -944,6 +948,12 @@ class Database:
                 """
             ).fetchall()
         for row in rows:
+            checks = {
+                "folders": bool(row["has_source_folder"]) and bool(row["has_spam_folder"]),
+                "index": row["index_status"] == "completed" and not bool(row["indexing"]),
+                "model": bool(row["active_model_version_id"]),
+                "automation": row["automation_mode"] in {"observe", "move"},
+            }
             blockers = []
             if bool(row["indexing"]) or row["index_status"] != "completed":
                 blockers.append("Initial indexing is not complete")
@@ -954,24 +964,34 @@ class Database:
             if not bool(row["has_spam_folder"]):
                 blockers.append("No Spam folder")
             observe_ready = not blockers
-            cutover_blockers = list(blockers)
-            if row["automation_mode"] != "move":
-                cutover_blockers.append("Automation is not in move mode")
-            if not row["spam_destination_folder_id"]:
-                cutover_blockers.append("No automatic Spam destination selected")
+            if row["latest_error"]:
+                readiness_status = "error"
+            elif bool(row["indexing"]):
+                readiness_status = "indexing"
+            elif not checks["folders"]:
+                readiness_status = "setup_required"
+            elif not checks["index"]:
+                readiness_status = "ready_to_index"
+            elif not checks["model"]:
+                readiness_status = "model_required"
+            elif row["automation_mode"] == "off":
+                readiness_status = "ready_to_enable"
+            else:
+                readiness_status = "active"
             accounts.append(
                 {
                     "id": row["id"], "display_name": row["display_name"],
                     "automation_mode": row["automation_mode"],
                     "ready_to_observe": observe_ready,
-                    "ready_to_replace_old_filter": not cutover_blockers,
-                    "blockers": blockers, "cutover_blockers": cutover_blockers,
+                    "ready": observe_ready and checks["automation"],
+                    "status": readiness_status,
+                    "checks": checks,
+                    "blockers": blockers,
                     "latest_error": row["latest_error"],
                 }
             )
         return {
-            "ready_to_replace_old_filters": bool(accounts)
-            and all(account["ready_to_replace_old_filter"] for account in accounts),
+            "ready": bool(accounts) and all(account["ready"] for account in accounts),
             "accounts": accounts,
         }
 
@@ -1002,6 +1022,17 @@ class Database:
             raise KeyError(account_id)
         now = utc_now()
         with self.connect() as connection:
+            initialized = connection.execute(
+                """SELECT EXISTS(SELECT 1 FROM folders WHERE account_id = ?
+                                  AND role IN ('ham', 'spam', 'monitored')) AS has_folders,
+                          EXISTS(SELECT 1 FROM jobs WHERE account_id = ?
+                                  AND kind = 'initial_index' AND status = 'completed') AS indexed""",
+                (account_id, account_id),
+            ).fetchone()
+            if not bool(initialized["has_folders"]):
+                raise RuntimeError("Configure mailbox folder roles before syncing")
+            if not bool(initialized["indexed"]):
+                raise RuntimeError("Complete the initial mailbox index before syncing")
             existing = connection.execute(
                 "SELECT id FROM jobs WHERE account_id = ? AND kind = 'reconcile_account' AND status IN ('queued', 'running')",
                 (account_id,),
@@ -1025,6 +1056,12 @@ class Database:
                 FROM accounts LEFT JOIN jobs
                     ON jobs.account_id = accounts.id AND jobs.kind = 'reconcile_account'
                 WHERE accounts.enabled = 1
+                  AND EXISTS(SELECT 1 FROM folders WHERE account_id = accounts.id
+                             AND role IN ('ham', 'spam', 'monitored'))
+                  AND EXISTS(SELECT 1 FROM jobs initial_jobs
+                             WHERE initial_jobs.account_id = accounts.id
+                               AND initial_jobs.kind = 'initial_index'
+                               AND initial_jobs.status = 'completed')
                 GROUP BY accounts.id
                 """
             ).fetchall()
