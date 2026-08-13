@@ -1335,6 +1335,94 @@ class Database:
             result = connection.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
             return dict(result)
 
+    def create_manual_spam_move_job(self, job_id: str, message_id: str) -> dict | None:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            message = connection.execute(
+                """SELECT messages.*, accounts.spam_destination_folder_id
+                   FROM messages JOIN accounts ON accounts.id = messages.account_id
+                   WHERE messages.id = ?""",
+                (message_id,),
+            ).fetchone()
+            if message is None:
+                raise KeyError(message_id)
+            destination = connection.execute(
+                """SELECT * FROM folders WHERE id = ? AND account_id = ? AND role = 'spam'""",
+                (message["spam_destination_folder_id"], message["account_id"]),
+            ).fetchone()
+            if destination is None:
+                raise RuntimeError(
+                    "Choose a Spam destination for this mailbox before marking messages as spam"
+                )
+            source = connection.execute(
+                """SELECT message_locations.*, folders.path, folders.role
+                   FROM message_locations JOIN folders ON folders.id = message_locations.folder_id
+                   WHERE message_locations.message_id = ? AND message_locations.present = 1
+                     AND folders.id != ?
+                   ORDER BY CASE folders.role WHEN 'ham' THEN 0 WHEN 'monitored' THEN 1 ELSE 2 END
+                   LIMIT 1""",
+                (message_id, destination["id"]),
+            ).fetchone()
+            connection.execute(
+                "UPDATE messages SET effective_label = 'spam', label_source = 'dashboard', label_changed_at = ? WHERE id = ?",
+                (now, message_id),
+            )
+            if message["effective_label"] != "spam":
+                connection.execute(
+                    "INSERT INTO message_events(message_id, event_type, old_value, new_value, source, created_at) VALUES (?, 'effective_label', ?, 'spam', 'dashboard', ?)",
+                    (message_id, message["effective_label"], now),
+                )
+            if source is None:
+                connection.commit()
+                return None
+            existing = connection.execute(
+                """SELECT id FROM jobs WHERE kind = 'manual_spam_move'
+                   AND status IN ('queued', 'running')
+                   AND json_extract(context_json, '$.message_id') = ?""",
+                (message_id,),
+            ).fetchone()
+            if existing:
+                connection.commit()
+                return self.get_job(existing["id"])
+            context = {
+                "message_id": message_id,
+                "source_folder_id": source["folder_id"],
+                "source_path": source["path"],
+                "source_uid_validity": int(source["uid_validity"]),
+                "source_uid": int(source["uid"]),
+                "destination_folder_id": destination["id"],
+                "destination_path": destination["path"],
+            }
+            connection.execute(
+                """INSERT INTO jobs(id, kind, status, account_id, context_json, created_at)
+                   VALUES (?, 'manual_spam_move', 'queued', ?, ?, ?)""",
+                (job_id, message["account_id"], json.dumps(context), now),
+            )
+            connection.commit()
+        return self.get_job(job_id)
+
+    def finish_manual_spam_move(self, message_id: str, source_folder_id: str) -> None:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """UPDATE message_locations SET present = 0
+                   WHERE message_id = ? AND folder_id = ?""",
+                (message_id, source_folder_id),
+            )
+            connection.execute(
+                """UPDATE messages SET mailbox_status = 'moved', label_source = 'dashboard',
+                       label_changed_at = ? WHERE id = ?""",
+                (now, message_id),
+            )
+            connection.execute(
+                """INSERT INTO message_events(
+                       message_id, event_type, old_value, new_value, source, created_at
+                   ) VALUES (?, 'manual_spam_move', NULL, 'moved', 'dashboard', ?)""",
+                (message_id, now),
+            )
+            connection.commit()
     def purge_message(self, message_id: str) -> str:
         now = utc_now()
         with self.connect() as connection:

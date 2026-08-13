@@ -77,7 +77,7 @@ The deployment is ready only when at least one enabled mailbox exists and every 
 - `observe`: record predictions without modifying mail.
 - `move`: move predicted spam to the selected folder with the `spam` role.
 
-Initial indexing is training-only. Automated moves are not treated as confirmed spam labels, so the model cannot teach itself that its prediction was correct. Human folder corrections and dashboard labels remain the source of truth.
+Initial indexing is training-only. Automated moves are not treated as confirmed spam labels, so the model cannot teach itself that its prediction was correct. Human folder corrections and dashboard labels remain the source of truth. Marking a message as Spam in the dashboard also queues a move from its recorded source folder to that mailbox's configured Spam destination; the move appears in background activity and fails safely if the recorded UID is stale.
 
 Use `observe` first. Review false positives, false negatives, thresholds, and destination behavior before enabling `move`.
 

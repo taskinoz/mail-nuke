@@ -447,11 +447,22 @@ def review_message(
     if payload.label is None and payload.training_status is None:
         raise HTTPException(status_code=400, detail="No review change was supplied")
     try:
-        return database.update_message_review(
-            message_id, payload.label, payload.training_status
-        )
+        move_job = None
+        if payload.label == "spam":
+            move_job = database.create_manual_spam_move_job(str(uuid4()), message_id)
+            result = database.update_message_review(
+                message_id, training_status=payload.training_status
+            )
+        else:
+            result = database.update_message_review(
+                message_id, payload.label, payload.training_status
+            )
+        result["mailbox_move_job"] = move_job
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Message not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/v2/messages/{message_id}/events")

@@ -420,6 +420,78 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(overridden["label_source"], "dashboard")
             self.assertEqual(overridden["training_status"], "excluded")
 
+    def test_manual_spam_review_queues_and_moves_mailbox_message(self):
+        class FakeImap:
+            def __init__(self):
+                self.moves = []
+
+            def select_folder(self, path, readonly=True):
+                self.selected = (path, readonly)
+                return {b"UIDVALIDITY": 9}
+
+            def search(self, criteria):
+                return [42]
+
+            def move(self, uids, destination):
+                self.moves.append((uids, destination))
+
+            def logout(self):
+                return None
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "mail-nuke.db")
+            database.initialize()
+            database.create_model_group("group-id", "Personal")
+            cipher = SecretCipher.load(None, root / "secret.key")
+            database.create_account(
+                {
+                    "id": "account-id", "model_group_id": "group-id", "display_name": "Example",
+                    "email_address": "example@example.com", "imap_host": "imap.example.com",
+                    "imap_port": 993, "imap_use_ssl": True, "imap_username": "example@example.com",
+                    "imap_password_ciphertext": cipher.encrypt("app-password"),
+                }
+            )
+            database.replace_discovered_folders(
+                "account-id",
+                [
+                    {"id": "inbox-id", "path": "INBOX", "delimiter": "/", "attributes": []},
+                    {"id": "junk-id", "path": "Junk", "delimiter": "/", "attributes": []},
+                ],
+            )
+            database.set_folder_roles(
+                "account-id", [{"path": "INBOX", "role": "ham"}, {"path": "Junk", "role": "spam"}]
+            )
+            with database.connect() as connection:
+                connection.execute(
+                    "UPDATE accounts SET spam_destination_folder_id = 'junk-id' WHERE id = 'account-id'"
+                )
+                connection.commit()
+            raw = b"Message-ID: <review@test>\r\nFrom: sender@test\r\nSubject: Review\r\n\r\nBody"
+            parsed = parse_message(raw)
+            parsed.update(
+                {"id": "message-id", "account_id": "account-id",
+                 "raw_storage_path": store_raw(root, parsed["content_sha256"], raw),
+                 "effective_label": "ham", "label_source": "initial_folder:ham"}
+            )
+            database.upsert_indexed_message(
+                parsed, {"id": "location-id", "folder_id": "inbox-id", "uid_validity": 9, "uid": 42}
+            )
+
+            job = database.create_manual_spam_move_job("move-job", "message-id")
+            self.assertEqual(job["kind"], "manual_spam_move")
+            client = FakeImap()
+            with patch("mail_nuke.reconciliation.connect", return_value=client):
+                self.assertTrue(process_next_job(database, cipher, root))
+
+            self.assertEqual(client.selected, ("INBOX", False))
+            self.assertEqual(client.moves, [([42], "Junk")])
+            self.assertEqual(database.get_job("move-job")["status"], "completed")
+            message = database.list_messages(account_id="account-id")["items"][0]
+            self.assertEqual(message["effective_label"], "spam")
+            self.assertEqual(message["mailbox_status"], "moved")
+
+
     def test_partial_reconciliation_failure_does_not_mark_messages_deleted(self):
         class PartialFailureImap:
             def select_folder(self, path, readonly=True):

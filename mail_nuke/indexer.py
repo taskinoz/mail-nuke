@@ -182,6 +182,10 @@ def process_next_job(database: Database, cipher: SecretCipher, data_dir: Path) -
             from mail_nuke.reconciliation import reconcile_account
 
             reconcile_account(database, cipher, data_dir, job, _model_runtime(data_dir))
+        elif job["kind"] == "manual_spam_move":
+            from mail_nuke.reconciliation import move_reviewed_message_to_spam
+
+            move_reviewed_message_to_spam(database, cipher, job)
         elif job["kind"] == "train_model":
             from mail_nuke.training import run_training
 

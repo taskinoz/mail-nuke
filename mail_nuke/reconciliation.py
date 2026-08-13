@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +11,36 @@ from mail_nuke.preprocessing import load_group_profile, preprocess_email
 from mail_nuke.security import SecretCipher
 from mail_nuke.scoring import ModelRuntime
 
+
+def move_reviewed_message_to_spam(
+    database: Database, cipher: SecretCipher, job: dict
+) -> dict:
+    account_row = database.get_account(job["account_id"])
+    if account_row is None:
+        raise RuntimeError("Account no longer exists")
+    account = dict(account_row)
+    password = cipher.decrypt(account.pop("imap_password_ciphertext"))
+    account["imap_use_ssl"] = bool(account["imap_use_ssl"])
+    context = json.loads(job.get("context_json") or "{}")
+    required = {
+        "message_id", "source_folder_id", "source_path", "source_uid_validity",
+        "source_uid", "destination_path",
+    }
+    if not required.issubset(context):
+        raise RuntimeError("Manual Spam move job is incomplete")
+    client = connect(account, password)
+    try:
+        selected = client.select_folder(context["source_path"], readonly=False)
+        if _uid_validity(selected) != int(context["source_uid_validity"]):
+            raise RuntimeError("Source folder UIDVALIDITY changed; synchronize and try again")
+        uid = int(context["source_uid"])
+        if uid not in {int(value) for value in client.search(["UID", str(uid)])}:
+            raise RuntimeError("Message is no longer present in its recorded source folder")
+        client.move([uid], context["destination_path"])
+        database.finish_manual_spam_move(context["message_id"], context["source_folder_id"])
+        return {"message_id": context["message_id"], "status": "moved"}
+    finally:
+        client.logout()
 
 def reconcile_account(
     database: Database, cipher: SecretCipher, data_dir: Path, job: dict,
