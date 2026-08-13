@@ -83,6 +83,12 @@ app = FastAPI(
 )
 static_dir = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+@app.middleware("http")
+async def require_frontend_cache_revalidation(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
 
 
 class InitialAdminRequest(BaseModel):
