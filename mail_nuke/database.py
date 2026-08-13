@@ -7,6 +7,7 @@ from datetime import timedelta
 from contextlib import contextmanager
 from contextlib import nullcontext
 from datetime import datetime, timezone
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -1223,6 +1224,86 @@ class Database:
             ).fetchall()
             return {"total": int(total), "items": [dict(row) for row in rows]}
 
+    def sender_classification_export(
+        self,
+        account_id: str | None = None,
+        group_id: str | None = None,
+        label: str | None = None,
+        entity: str = "all",
+    ) -> list[dict]:
+        if label not in {None, "ham", "spam"}:
+            raise ValueError("Label must be ham or spam")
+        if entity not in {"all", "domain", "email"}:
+            raise ValueError("Entity must be all, domain, or email")
+        clauses = ["messages.effective_label IN ('ham', 'spam')", "messages.training_status != 'purged'"]
+        params: list[Any] = []
+        for column, value in (
+            ("messages.account_id", account_id),
+            ("accounts.model_group_id", group_id),
+            ("messages.effective_label", label),
+        ):
+            if value:
+                clauses.append(f"{column} = ?")
+                params.append(value)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT messages.account_id, messages.from_header, messages.sender_domain,
+                    messages.effective_label, messages.first_seen_at, messages.last_seen_at
+                FROM messages JOIN accounts ON accounts.id = messages.account_id
+                WHERE {' AND '.join(clauses)}
+                """,
+                params,
+            ).fetchall()
+
+        aggregates: dict[tuple[str, str, str], dict] = {}
+        for row in rows:
+            email_address = parseaddr(row["from_header"] or "")[1].strip().casefold()
+            if "@" not in email_address:
+                email_address = ""
+            domain = (
+                email_address.rsplit("@", 1)[1]
+                if email_address
+                else str(row["sender_domain"] or "").strip().casefold()
+            )
+            values = []
+            if entity in {"all", "email"} and email_address:
+                values.append(("email", email_address))
+            if entity in {"all", "domain"} and domain:
+                values.append(("domain", domain))
+            for entity_type, value in values:
+                key = (entity_type, value, row["effective_label"])
+                aggregate = aggregates.setdefault(
+                    key,
+                    {
+                        "entity_type": entity_type,
+                        "value": value,
+                        "label": row["effective_label"],
+                        "message_count": 0,
+                        "account_ids": set(),
+                        "first_seen_at": row["first_seen_at"],
+                        "last_seen_at": row["last_seen_at"],
+                    },
+                )
+                aggregate["message_count"] += 1
+                aggregate["account_ids"].add(row["account_id"])
+                aggregate["first_seen_at"] = min(
+                    aggregate["first_seen_at"], row["first_seen_at"]
+                )
+                aggregate["last_seen_at"] = max(
+                    aggregate["last_seen_at"], row["last_seen_at"]
+                )
+
+        result = []
+        for aggregate in aggregates.values():
+            aggregate["account_count"] = len(aggregate.pop("account_ids"))
+            result.append(aggregate)
+        return sorted(
+            result,
+            key=lambda item: (
+                item["entity_type"], -item["message_count"], item["value"], item["label"]
+            ),
+        )
     def update_message_review(
         self, message_id: str, label: str | None = None, training_status: str | None = None
     ) -> dict:

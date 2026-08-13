@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import asyncio
+import csv
+import io
 import json
 import sqlite3
 from pathlib import Path
@@ -9,7 +11,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -383,6 +385,54 @@ def list_review_messages(
         account_id, group_id, label, mailbox_status, training_status, search, limit, offset
     )
 
+
+@app.get("/api/v2/exports/sender-classifications")
+def export_sender_classifications(
+    _: AuthenticatedUser,
+    format: Literal["json", "csv"] = "csv",
+    entity: Literal["all", "domain", "email"] = "all",
+    label: Literal["ham", "spam"] | None = None,
+    account_id: str | None = None,
+    group_id: str | None = None,
+):
+    rows = database.sender_classification_export(account_id, group_id, label, entity)
+    filename = f"mail-nuke-sender-classifications-{label or 'all'}"
+    if format == "json":
+        return Response(
+            content=json.dumps(
+                {
+                    "filters": {
+                        "account_id": account_id,
+                        "group_id": group_id,
+                        "label": label,
+                        "entity": entity,
+                    },
+                    "count": len(rows),
+                    "items": rows,
+                },
+                indent=2,
+            ),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}.json"'},
+        )
+
+    output = io.StringIO(newline="")
+    fieldnames = [
+        "entity_type", "value", "label", "message_count", "account_count",
+        "first_seen_at", "last_seen_at",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        safe_row = dict(row)
+        if safe_row["value"].startswith(("=", "+", "-", "@")):
+            safe_row["value"] = "'" + safe_row["value"]
+        writer.writerow(safe_row)
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.csv"'},
+    )
 
 @app.patch("/api/v2/messages/{message_id}")
 def review_message(

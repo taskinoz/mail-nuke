@@ -98,6 +98,52 @@ class DatabaseTests(unittest.TestCase):
             messages = database.list_messages(account_id="account-id")["items"]
             self.assertEqual([message["id"] for message in messages], ["newer", "older"])
 
+    def test_sender_classification_export_deduplicates_and_counts_values(self):
+        with TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "mail-nuke.db")
+            database.initialize()
+            database.create_model_group("group-id", "Personal")
+            database.create_account(
+                {
+                    "id": "account-id", "model_group_id": "group-id", "display_name": "Example",
+                    "email_address": "owner@example.com", "imap_host": "imap.example.com",
+                    "imap_port": 993, "imap_use_ssl": True, "imap_username": "owner@example.com",
+                    "imap_password_ciphertext": "encrypted-value",
+                }
+            )
+            database.replace_discovered_folders(
+                "account-id", [{"id": "folder-id", "path": "Archive", "delimiter": "/", "attributes": []}]
+            )
+            messages = [
+                ("spam-1", "Offers <DEALS@Example.test>", "spam", 1),
+                ("spam-2", "deals@example.test", "spam", 2),
+                ("ham-1", "Friend <friend@example.test>", "ham", 3),
+                ("invalid", "No address", "spam", 4),
+            ]
+            for message_id, from_header, label, uid in messages:
+                database.upsert_indexed_message(
+                    {
+                        "id": message_id, "account_id": "account-id", "message_key": message_id,
+                        "rfc_message_id": f"<{message_id}@test>", "content_sha256": message_id,
+                        "from_header": from_header, "sender_domain": None, "subject": message_id,
+                        "received_at": None, "raw_storage_path": f"{message_id}.gz",
+                        "effective_label": label, "label_source": f"initial_folder:{label}",
+                    },
+                    {"id": f"location-{message_id}", "folder_id": "folder-id", "uid_validity": 1, "uid": uid},
+                )
+
+            rows = database.sender_classification_export(group_id="group-id")
+            keyed = {(row["entity_type"], row["value"], row["label"]): row for row in rows}
+            self.assertEqual(keyed[("email", "deals@example.test", "spam")]["message_count"], 2)
+            self.assertEqual(keyed[("domain", "example.test", "spam")]["message_count"], 2)
+            self.assertEqual(keyed[("domain", "example.test", "ham")]["message_count"], 1)
+            self.assertEqual(keyed[("email", "friend@example.test", "ham")]["account_count"], 1)
+            self.assertEqual(
+                database.sender_classification_export(label="ham", entity="email")[0]["value"],
+                "friend@example.test",
+            )
+
+
     def test_initializes_schema_and_allows_only_one_initial_admin(self):
         with TemporaryDirectory() as directory:
             database = Database(Path(directory) / "mail-nuke.db")
