@@ -942,13 +942,43 @@ class Database:
                            AND kind = 'initial_index' AND status IN ('queued', 'running')) AS indexing,
                     (SELECT status FROM jobs WHERE account_id = accounts.id
                      AND kind = 'initial_index' ORDER BY created_at DESC LIMIT 1) AS index_status,
-                    (SELECT error_summary FROM jobs WHERE account_id = accounts.id
-                     AND status = 'failed' ORDER BY created_at DESC LIMIT 1) AS latest_error
+                    (SELECT json_object(
+                         'id', failed.id,
+                         'kind', failed.kind,
+                         'error', failed.error_summary,
+                         'failed_at', failed.finished_at
+                     )
+                     FROM jobs failed
+                     WHERE failed.account_id = accounts.id
+                       AND failed.status = 'failed'
+                       AND NOT EXISTS(
+                           SELECT 1 FROM jobs resolved
+                           WHERE resolved.account_id = failed.account_id
+                             AND resolved.kind = failed.kind
+                             AND resolved.status = 'completed'
+                             AND resolved.created_at > failed.created_at
+                       )
+                     ORDER BY failed.created_at DESC LIMIT 1) AS unresolved_error_json
                 FROM accounts JOIN model_groups ON model_groups.id = accounts.model_group_id
                 WHERE accounts.enabled = 1 ORDER BY accounts.display_name COLLATE NOCASE
                 """
             ).fetchall()
         for row in rows:
+            unresolved_error = (
+                json.loads(row["unresolved_error_json"])
+                if row["unresolved_error_json"]
+                else None
+            )
+            recovery_actions = {
+                "initial_index": "Open Mailboxes, test the connection and folder roles, then retry Index.",
+                "reconcile_account": "Open Mailboxes, test the connection, then run Sync now.",
+                "manual_spam_move": "Check the mailbox Spam destination, run Sync now, then mark the message as Spam again.",
+            }
+            if unresolved_error:
+                unresolved_error["action"] = recovery_actions.get(
+                    unresolved_error["kind"],
+                    "Review Background activity, correct the reported problem, then retry the operation.",
+                )
             checks = {
                 "folders": bool(row["has_source_folder"]) and bool(row["has_spam_folder"]),
                 "index": row["index_status"] == "completed" and not bool(row["indexing"]),
@@ -965,7 +995,7 @@ class Database:
             if not bool(row["has_spam_folder"]):
                 blockers.append("No Spam folder")
             observe_ready = not blockers
-            if row["latest_error"]:
+            if unresolved_error:
                 readiness_status = "error"
             elif bool(row["indexing"]):
                 readiness_status = "indexing"
@@ -988,7 +1018,8 @@ class Database:
                     "status": readiness_status,
                     "checks": checks,
                     "blockers": blockers,
-                    "latest_error": row["latest_error"],
+                    "latest_error": unresolved_error["error"] if unresolved_error else None,
+                    "error": unresolved_error,
                 }
             )
         return {

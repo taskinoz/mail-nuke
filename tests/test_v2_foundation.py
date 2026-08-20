@@ -772,6 +772,21 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(readiness["accounts"][0]["status"], "active")
             self.assertTrue(readiness["accounts"][0]["ready_to_observe"])
 
+            database.create_reconcile_job("failed-sync", "account-id")
+            database.finish_job("failed-sync", "IMAP connection timed out")
+            readiness = database.deployment_readiness()
+            account_readiness = readiness["accounts"][0]
+            self.assertEqual(account_readiness["status"], "error")
+            self.assertEqual(account_readiness["error"]["kind"], "reconcile_account")
+            self.assertEqual(account_readiness["error"]["error"], "IMAP connection timed out")
+            self.assertIn("run Sync now", account_readiness["error"]["action"])
+
+            database.create_reconcile_job("successful-sync", "account-id")
+            database.finish_job("successful-sync")
+            readiness = database.deployment_readiness()
+            self.assertEqual(readiness["accounts"][0]["status"], "active")
+            self.assertIsNone(readiness["accounts"][0]["error"])
+
     def test_mailbox_jobs_wait_for_folder_setup_and_initial_index(self):
         with TemporaryDirectory() as directory:
             database = Database(Path(directory) / "mail-nuke.db")
